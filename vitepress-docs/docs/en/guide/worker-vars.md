@@ -12,6 +12,9 @@
 | `ADMIN_PASSWORDS`          | JSON        | Admin console passwords, console access disabled if not configured     | `["123", "456"]`                     |
 | `ENABLE_USER_CREATE_EMAIL` | Text/JSON   | Whether to allow users to create mailboxes, disabled if not configured | `true`                               |
 | `ENABLE_USER_DELETE_EMAIL` | Text/JSON   | Whether to allow users to delete emails, disabled if not configured    | `true`                               |
+| `ENABLE_MAIL_READ_STATUS` | Text/JSON | Enables read/unread mail state. Upgrade the database schema before enabling | `true` |
+| `ENABLE_REDEEM_CODE` | Text/JSON | Enables the redemption page, public redemption APIs, and Admin redemption management; disabled by default | `true` |
+| `REDEEM_CODE_URL` | Text | External URL for obtaining redemption codes; the link is hidden when unset | `https://example.com/redeem-codes` |
 
 > [!IMPORTANT] `DOMAINS` and `DEFAULT_DOMAINS` must already be set up in Cloudflare
 > Every domain you put here (including `DEFAULT_DOMAINS`, `USER_ROLES.domains`, `RANDOM_SUBDOMAIN_DOMAINS` further below) **must already have Cloudflare Email Routing enabled and its email DNS records provisioned**. After the Worker is deployed, bind the domain's Catch-all rule to that Worker; otherwise inbound mail will never reach the Worker.
@@ -22,7 +25,10 @@
 | Variable Name                  | Type      | Description                                             | Example          |
 | ------------------------------ | --------- | ------------------------------------------------------- | ---------------- |
 | `PASSWORDS`                    | JSON      | Website private passwords, required after configuration | `["123", "456"]` |
+| `ADMIN_API_IP_WHITELIST`       | JSON      | Admin API IP whitelist; when configured, only listed IPs may access `/admin/*` | `["203.0.113.10"]` |
 | `DISABLE_ADMIN_PASSWORD_CHECK` | Text/JSON | Warning: Admin console without password or user check   | `false`          |
+
+When `ADMIN_API_IP_WHITELIST` is unset or empty, source IPs are not restricted. Once configured, it applies to both admin-password and Admin user-token access, trusts only Cloudflare's `CF-Connecting-IP` header, and denies requests without that header.
 
 ## Email Related Variables
 
@@ -32,6 +38,7 @@
 | `MIN_ADDRESS_LEN`                     | Number    | Minimum length of `email address` name                                                                                                                                                                            | `1`                                       |
 | `MAX_ADDRESS_LEN`                     | Number    | Maximum length of `email address` name                                                                                                                                                                            | `30`                                      |
 | `DISABLE_CUSTOM_ADDRESS_NAME`         | Text/JSON | Disable custom email address names, if set to true, users cannot enter custom names and they will be auto-generated                                                                                               | `true`                                    |
+| `DISABLE_ADDRESS_UPDATED_AT` | Text/JSON | Defaults to `false`. Set to `true` to stop individual and user-wide address activity keep-alive updates and disable built-in manual and scheduled inactive-address cleanup. Initial address timestamps, password operations, and other cleanup rules remain unchanged | `true` |
 | `ADDRESS_CHECK_REGEX`                 | Text      | Regular expression for `email address` name, used for validation only                                                                                                                                             | `^(?!.*admin).*`                          |
 | `ADDRESS_REGEX`                       | Text      | Regular expression to replace illegal symbols in `email address` name, symbols not in the regex will be replaced. Default is `[^a-z0-9]` if not set. Use with caution as some symbols may prevent email reception | `[^a-z0-9]`                               |
 | `DEFAULT_DOMAINS`                     | JSON      | Default domains available to users (not logged in or users without assigned roles)                                                                                                                                | `["awsl.uk", "dreamhunter2333.xyz"]`      |
@@ -94,7 +101,7 @@
 
 | Variable Name                   | Type      | Description                                                                                                            | Example                    |
 | ------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-| `BLACK_LIST`                    | Text      | Blacklist for filtering senders, comma separated                                                                       | `gov.cn,edu.cn`            |
+| `BLACK_LIST`                    | Text      | Comma-separated sender blacklist; case-sensitive substring matching against the SMTP envelope sender and every email address parsed from From, independently of body parsing. Any match rejects the mail. The admin sender blacklist follows the same rule; display names are not matched. | `gov.cn,edu.cn`            |
 | `ENABLE_CHECK_JUNK_MAIL`        | Text/JSON | Whether to enable junk mail checking, used with the following two lists                                                | `false`                    |
 | `JUNK_MAIL_CHECK_LIST`          | JSON      | Existence check; registered failure/error results are junk, while `none` and SPF/DKIM `neutral` are treated as absent  | `["spf", "dkim", "dmarc"]` |
 | `JUNK_MAIL_FORCE_PASS_LIST`     | JSON      | Strict pass check; every item must explicitly return `pass`, otherwise it is treated as junk                           | `["spf", "dkim", "dmarc"]` |
@@ -102,7 +109,7 @@
 | `REMOVE_EXCEED_SIZE_ATTACHMENT` | Text/JSON | If attachment exceeds 2MB, remove it, email may lose some information due to parsing                                   | `true`                     |
 | `REMOVE_ALL_ATTACHMENT`         | Text/JSON | Remove all attachments, email may lose some information due to parsing                                                 | `true`                     |
 | `ENABLE_MAIL_GZIP`             | Text/JSON | When enabled, new emails are gzip-compressed and stored in `raw_blob` column to save D1 database space. Existing plaintext `raw` data is automatically compatible for reading. **Run database migration first (`Admin -> Quick Setup -> Database -> Migrate Database` or `POST /admin/db_migration`) to ensure the `raw_blob` column exists before enabling. This feature adds compression/decompression CPU overhead, so enabling it on a paid Cloudflare Worker plan is recommended.** | `true`                     |
-| `CLEANUP_BATCH_SIZE`           | Number    | Per-run limit for mail, sent-mail, and creation/activity-based address cleanup. Defaults to `3000`, valid range `1-5000`. Smaller values reduce per-run D1 pressure; larger values clear backlogs faster | `3000` |
+| `CLEANUP_BATCH_SIZE`           | Number    | Per-run limit for built-in mail, sent-mail, and address cleanup tasks. Defaults to `3000`, valid range `1-5000`. Smaller values reduce per-run D1 pressure; larger values clear backlogs faster | `3000` |
 
 > [!NOTE]
 > Authentication results follow their standards: SPF `none` means no usable domain or SPF record was found, and SPF `neutral` must be treated like `none`; DKIM `none` means the message was unsigned, and DKIM `neutral` is also treated as unsigned; DMARC `none` means no applicable DMARC policy was found. Unregistered results and unsupported method versions are ignored. `JUNK_MAIL_CHECK_LIST` treats these results as absent, while `JUNK_MAIL_FORCE_PASS_LIST` still requires an explicit supported `pass`
@@ -121,6 +128,7 @@
 | ---------------- | --------- | ------------------------------------------------- | ------------------ |
 | `ENABLE_WEBHOOK` | Text/JSON | Whether to enable webhook                         | `true`             |
 | `FRONTEND_URL`   | Text      | Frontend URL, used for sending webhook email URLs | `https://xxxx.xxx` |
+| `BACKEND_URL` | Text | Public backend base URL for signed attachment links; attachment URLs are empty when unset | `https://temp-email-api.example.com` |
 
 > [!NOTE]
 > Webhook functionality requires email parsing, free tier CPU is limited, may cause large email parsing timeout
